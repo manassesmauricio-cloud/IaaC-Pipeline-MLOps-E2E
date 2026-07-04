@@ -1,0 +1,116 @@
+version: '3.8'
+
+# ── Variables comunes a todos los servicios Airflow ───────────────────────────
+x-airflow-common: &airflow-common
+  build: .
+  env_file: .env
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+    PYTHONPATH: /opt/airflow/scripts:/opt/airflow/src
+    MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI}
+    MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - ./config:/opt/airflow/config
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./scripts:/opt/airflow/scripts:ro        # scripts del pipeline (en el repo)
+    - ./data:/opt/airflow/data                 # datos intermedios (preprocesada, scores, etc.)
+    - ./models:/opt/airflow/models             # produccion/ y candidatos/
+    - ./monitoreo:/opt/airflow/monitoreo       # outputs de monitoreo (PSI, dashboard)
+    - ${HOST_DATASET_PATH}:/opt/airflow/data_raw  # datos crudos (externos al repo)
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+
+  # ── Base de datos (Airflow metadata + MLflow backend) ────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init_mlflow_db.sql:/docker-entrypoint-initdb.d/init_mlflow_db.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+      interval: 10s
+      retries: 5
+
+  # ── MLflow tracking server (usa la misma imagen que Airflow, MLflow ya instalado) ─
+  mlflow:
+    build: .
+    user: airflow
+    ports:
+      - "5000:5000"
+    env_file: .env
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/mlflow
+    entrypoint: []
+    command: >
+      mlflow server
+        --host 0.0.0.0
+        --port 5000
+        --backend-store-uri postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/mlflow
+        --default-artifact-root /mlflow/artifacts
+    volumes:
+      - ./mlflow/artifacts:/mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Airflow: inicialización (se ejecuta una sola vez) ────────────────────────
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db upgrade
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname MLOps \
+          --lastname Docente \
+          --role Admin \
+          --email antonimauricio19932@gmail.com
+    restart: on-failure
+
+  # ── Airflow: webserver (UI en http://localhost:8080) ─────────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Airflow: scheduler (procesa DAGs) ────────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $(hostname)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

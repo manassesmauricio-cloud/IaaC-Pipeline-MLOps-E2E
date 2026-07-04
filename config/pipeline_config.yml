@@ -1,0 +1,45 @@
+# ── Configuración del pipeline de ML/Monitoreo ───────────────────────────────
+# Equivale al dict `payload` del notebook 11. Pipeline monitoreo.ipynb
+# Paths relativos al contenedor (ver docker-compose.yml para el mapeo HOST → contenedor)
+
+model:
+  name: extrac
+  # run_mode controla el punto de entrada al pipeline:
+  #   training  -> training_pipeline DAG (entrena + registra en MLflow + monitorea OOT)
+  #   inference -> monitoring_pipeline DAG directo (carga modelo de produccion, monitorea OOT)
+  # En AMBOS modos se ejecuta el monitoreo completo OOT.
+  run_mode: training
+  training_periods: [1, 2, 3, 4]       # Períodos de referencia fija
+  monitoring_periods: [11, 12]          # Períodos OOT a monitorear (disponibles: 11-14)
+  moving_avg_window: 3                  # Ventana de media móvil (meses)
+  top_n_vars: 15                        # Features en heatmap del dashboard
+  psi_quantils: 1000                    # Buckets para cálculo PSI
+  score_col: predictions
+  puntuacion_col: puntuacion
+  grupo_col: grupo_ejec
+
+paths:
+  # ── Datos crudos (HOST_DATASET_PATH en .env → /opt/airflow/data_raw) ────────
+  raw_train: /opt/airflow/data_raw/data de entrenamiento
+  raw_oot:   /opt/airflow/data_raw/OOT
+
+  # ── Datos intermedios del pipeline (./data/ en repo → /opt/airflow/data) ────
+  processed:  /opt/airflow/data          # raíz: subirectorios preprocessed/, posprocesada/, etc.
+  scores:     /opt/airflow/data/scores
+  output:     /opt/airflow/data/posprocesada
+
+  # ── Modelos (./models/ en repo → /opt/airflow/models) ───────────────────────
+  models:     /opt/airflow/models/produccion    # modelo en producción (usado por inferencia)
+  candidatos: /opt/airflow/models/candidatos    # modelos entrenados no promovidos
+
+  # ── Monitoreo (./monitoreo/ en repo → /opt/airflow/monitoreo) ───────────────
+  monitoring: /opt/airflow/monitoreo
+
+mlflow:
+  tracking_uri: http://mlflow:5000
+  experiment_name: pipeline-extrac
+
+monitoring:
+  alert_duration_s: 30                  # Segundos para alerta de step lento
+  alert_ram_delta_mb: 200               # MB de delta RAM para alerta
+  alert_ram_sys_pct: 80                 # % RAM sistema para alerta

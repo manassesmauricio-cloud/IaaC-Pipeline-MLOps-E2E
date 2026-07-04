@@ -1,0 +1,32 @@
+# Secrets — NUNCA commitear
+.env
+
+# Logs de Airflow (generados en runtime)
+logs/
+
+# Datos intermedios del pipeline (generados en runtime)
+data/*
+!data/.gitkeep
+
+# Resultados de monitoreo (generados en runtime)
+monitoreo/*
+!monitoreo/.gitkeep
+
+# Modelos (generados en runtime)
+models/candidatos/*
+!models/candidatos/.gitkeep
+models/produccion/*
+!models/produccion/.gitkeep
+
+# Artefactos MLflow (pueden ser muy grandes)
+mlflow/artifacts/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# OS
+.DS_Store
