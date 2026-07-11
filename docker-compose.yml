@@ -65,6 +65,7 @@ services:
         --port 5000
         --backend-store-uri postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/mlflow
         --default-artifact-root /mlflow/artifacts
+        --serve-artifacts
     volumes:
       - ./mlflow/artifacts:/mlflow/artifacts
     depends_on:

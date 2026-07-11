@@ -122,8 +122,11 @@ INTERFACES WEB
     - DAG de entrada: pipeline_orchestrator
 
 
-EJECUTAR EL PIPELINE
----------------------
+EJECUTAR EL PIPELINE (punto de entrada recomendado)
+----------------------------------------------------
+
+El DAG orquestador "pipeline_orchestrator" es el punto de entrada unico.
+Lee run_mode de config/pipeline_config.yml y decide automaticamente que fases correr.
 
 Opcion A - terminal:
   docker compose exec airflow-scheduler airflow dags trigger pipeline_orchestrator
@@ -131,9 +134,105 @@ Opcion A - terminal:
 Opcion B - Airflow UI:
   http://localhost:8080 -> DAG "pipeline_orchestrator" -> boton Trigger
 
-El orquestador lee run_mode del config y decide:
+Flujo segun run_mode:
   training  -> training_pipeline (Fase A) -> monitoring_pipeline (Fase B)
   inference -> monitoring_pipeline (Fase B) directamente
+
+
+PIPELINE DE ENTRENAMIENTO (Fase A — training_pipeline)
+-------------------------------------------------------
+
+Cuando ejecutar:
+  - Primera vez (no hay modelo en models/produccion/)
+  - Cuando quieres reentrenar con datos nuevos
+
+Paso 1. Asegurarte de que run_mode sea "training" en config/pipeline_config.yml:
+
+    model:
+      run_mode: training
+
+Paso 2. Disparar el DAG de entrenamiento (directamente, sin pasar por el orquestador):
+
+  Opcion A - terminal:
+    docker compose exec airflow-scheduler airflow dags unpause training_pipeline
+    docker compose exec airflow-scheduler airflow dags trigger training_pipeline
+
+  Opcion B - Airflow UI:
+    http://localhost:8080 -> DAG "training_pipeline" -> activar toggle -> boton Trigger
+
+Que hace este DAG (en orden):
+  1. setup_directories       Crea las carpetas necesarias en data/, models/, monitoreo/
+  2. preprocess_baseline     Preprocesa el periodo p1 (referencia base)
+  3. [PARALELO]
+     - monitor_raw_training       PSI de datos crudos p2-p4 vs p1
+     - preprocess_training_periods  Preprocesa p2-p4 en modo inference
+  4. build_reference         Concatena p1-p4 y guarda referencia en disco
+  5. [PARALELO]
+     - preprocess_training_mode   Preprocesa todos los datos en modo training (train/test split)
+     - monitor_pre_reference      PSI de datos preprocesados p2-p4 vs referencia
+  6. train_model             Entrena el modelo (busca el mejor entre los configurados),
+                             registra en MLflow Registry y promueve a models/produccion/
+  7. run_inference_reference Genera scores sobre el periodo de referencia (p1)
+  8. [PARALELO]
+     - monitor_scores_reference   PSI de scores de referencia
+     - postprocess_reference      Posprocesa scores de referencia
+  9. monitor_grupos_reference    PSI de grupos operacionales de referencia
+
+Resultados:
+  - Modelo en produccion:    models/produccion/
+  - Candidato con timestamp: models/candidatos/{timestamp}_{modelo}/
+  - Experimento MLflow:      http://localhost:5000 -> pipeline-extrac
+  - Registry MLflow:         http://localhost:5000 -> Models -> modelo-extrac
+
+
+PIPELINE DE INFERENCIA / MONITOREO OOT (Fase B — monitoring_pipeline)
+-----------------------------------------------------------------------
+
+Cuando ejecutar:
+  - El modelo ya esta entrenado y en models/produccion/
+  - Quieres monitorear nuevos periodos OOT sin reentrenar
+
+Paso 1. Cambiar run_mode a "inference" en config/pipeline_config.yml:
+
+    model:
+      run_mode: inference
+
+Paso 2. Disparar el DAG de monitoreo (directamente):
+
+  Opcion A - terminal:
+    docker compose exec airflow-scheduler airflow dags unpause monitoring_pipeline
+    docker compose exec airflow-scheduler airflow dags trigger monitoring_pipeline
+
+  Opcion B - Airflow UI:
+    http://localhost:8080 -> DAG "monitoring_pipeline" -> activar toggle -> boton Trigger
+
+  Opcion C - via orquestador (automatico):
+    Asegurarte de que run_mode = "inference" en el config y disparar pipeline_orchestrator.
+    El orquestador salta el entrenamiento y ejecuta directamente la Fase B.
+
+Que hace este DAG (por cada periodo OOT configurado):
+  1. load_reference          Carga desde disco las referencias generadas en el entrenamiento
+                             (data/reference_raw.pkl, reference_pre.pkl, reference_scores.pkl, etc.)
+  2. [PARALELO por periodo]
+     - monitor_raw_p{N}      PSI de datos crudos del periodo OOT vs referencia raw
+     - preprocess_p{N}       Preprocesa datos del periodo OOT
+  3. [PARALELO por periodo]
+     - monitor_pre_p{N}      PSI de datos preprocesados vs referencia pre
+     - run_inference_p{N}    Genera scores con el modelo de produccion
+  4. [PARALELO por periodo]
+     - monitor_scores_p{N}   PSI de distribucion de scores
+     - postprocess_p{N}      Posprocesa scores
+  5. monitor_grupos_p{N}     PSI de grupos operacionales
+  6. generate_dashboard      Genera el dashboard HTML con todos los resultados PSI
+
+Resultados:
+  - Dashboard HTML:          monitoreo/dashboard_monitoring_{periodo}.html
+  - PSI por etapa:           monitoreo/drift_{etapa}_{periodo}.csv
+  - Scores:                  data/scores/
+  - Scores posprocesados:    data/posprocesada/
+
+NOTA: Para que la Fase B funcione, la Fase A debe haberse ejecutado al menos una vez
+      (las referencias en data/ deben existir en disco).
 
 
 VER RESULTADOS
