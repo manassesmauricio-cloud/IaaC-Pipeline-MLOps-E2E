@@ -2,7 +2,6 @@ import glob
 import time
 import psutil
 import pandas as pd
-import dask.dataframe as dd
 import numpy as np
 
 # LEER VARIABLES CRUDAS =======================================================

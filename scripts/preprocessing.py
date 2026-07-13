@@ -1,7 +1,6 @@
 import glob
 import numpy as np
 import pandas as pd
-import dask.dataframe as dd
 from sklearn.model_selection import train_test_split
 
 # LEER VARIABLES CRUDAS =======================================================
@@ -29,9 +28,8 @@ def read_rawdata(period, type_work, DIR_RAWDATA):
             path = glob.glob(f'{DIR_RAWDATA}/p{period}_extrac.csv')[0]
             df = pd.read_csv(path)
         except: # Intentar leer las variables en formato 'parquet'
-            path = f'{DIR_RAWDATA}/*'
-            df = dd.read_parquet(path)
-            df = df.compute().reset_index(drop=True)
+            paths = glob.glob(f'{DIR_RAWDATA}/*')
+            df = pd.concat([pd.read_parquet(p) for p in paths], ignore_index=True).reset_index(drop=True)
     return df
 
 # PROCESAR VARIABLES ==========================================================
